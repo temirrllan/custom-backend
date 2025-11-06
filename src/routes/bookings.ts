@@ -4,11 +4,12 @@ import { Costume } from '../models/Costume';
 import { validatePhone } from '../utils/validatePhone';
 import { bot } from '../bot/bot';
 import { appendBookingToSheet } from "../utils/googleSheets";
+import { bookingRateLimit } from "../middlewares/bookingRateLimit";
 
 const router = Router();
 
 // POST /api/bookings
-router.post('/', async (req, res) => {
+router.post('/',bookingRateLimit, async (req, res) => {
   try {
     const {
       userTgId, clientName, phone, costumeId, size, childName, childAge, childHeight
