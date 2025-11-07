@@ -9,6 +9,7 @@ import adminUploadRouter from "./routes/adminUpload";
 dotenv.config();
 import adminBookingsRouter from "./routes/adminBookings";
 import adminLogsRouter from "./routes/adminLogs";
+import usersRouter from "./routes/users";
 
 
 const app = express();
@@ -27,5 +28,6 @@ app.use("/api/costumes", costumesRouter);
 app.use("/api/bookings", bookingsRouter);
 app.use("/api/admin/costumes", adminCostumesRouter);
 app.use("/api/admin/upload", adminUploadRouter);
+app.use("/api/users", usersRouter);
 
 export default app;
