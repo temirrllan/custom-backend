@@ -1,15 +1,12 @@
-import { Schema, model, Document } from 'mongoose';
+import { Schema, model } from "mongoose";
 
-export interface IAdminLog extends Document {
-  action: string;
-  adminTgId?: number;
-  details?: any;
-}
+const adminLogSchema = new Schema(
+  {
+    adminTgId: Number,
+    action: String,
+    details: Schema.Types.Mixed,
+  },
+  { timestamps: true }
+);
 
-const AdminLogSchema = new Schema<IAdminLog>({
-  action: { type: String, required: true },
-  adminTgId: Number,
-  details: Schema.Types.Mixed
-}, { timestamps: true });
-
-export const AdminLog = model<IAdminLog>('AdminLog', AdminLogSchema);
+export const AdminLog = model("AdminLog", adminLogSchema);

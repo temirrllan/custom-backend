@@ -1,33 +1,45 @@
-import { Bot, InlineKeyboard } from "grammy";
+import { Bot } from "grammy";
+import { User } from "../models/User";
 import dotenv from "dotenv";
 dotenv.config();
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-if (!BOT_TOKEN) {
-  console.error("❌ BOT_TOKEN не найден в .env");
-  process.exit(1);
-}
+export const bot = new Bot(process.env.BOT_TOKEN!);
 
-export const bot = new Bot(BOT_TOKEN);
-
-// /start команда
 bot.command("start", async (ctx) => {
-  try {
-    const webAppUrl = process.env.PUBLIC_WEBAPP_URL || "https://example.com";
-    const user = ctx.from;
+  const tgId = ctx.from?.id;
+  if (!tgId) return;
 
-    await ctx.reply(
-      "Добро пожаловать в прокат костюмов «Надежда»! 🎭\n\nНажмите кнопку ниже, чтобы открыть каталог 👇",
-      {
-        reply_markup: new InlineKeyboard().webApp(
-          "Открыть каталог",
-          `${webAppUrl}?tgId=${user?.id}`
-        ),
-      }
-    );
+  const adminIds = (process.env.ADMIN_TG_IDS || "").split(",").map((x) => x.trim());
+  const isAdmin = adminIds.includes(tgId.toString());
 
-    console.log(`✅ /start обработан для ${user?.username} (${user?.id})`);
-  } catch (err) {
-    console.error("Ошибка в /start:", err);
-  }
+  await User.findOneAndUpdate(
+    { tgId },
+    {
+      tgId,
+      username: ctx.from?.username,
+      firstName: ctx.from?.first_name,
+      lastName: ctx.from?.last_name,
+      isAdmin,
+    },
+    { upsert: true }
+  );
+
+  const webAppUrl = process.env.PUBLIC_WEBAPP_URL!;
+  await ctx.reply(
+    isAdmin
+      ? "👑 Вы вошли как администратор."
+      : "Добро пожаловать! Вы можете выбрать костюм из каталога.",
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: isAdmin ? "Открыть админ-панель" : "Открыть каталог",
+              web_app: { url: webAppUrl },
+            },
+          ],
+        ],
+      },
+    }
+  );
 });

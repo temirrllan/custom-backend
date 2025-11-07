@@ -23,9 +23,9 @@ const uploadsPath = path.join(__dirname, "..", "uploads");
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 app.use("/api/admin/bookings", adminBookingsRouter);
 // admin upload route
-app.use("/api/admin/upload", adminUploadRouter);
 app.use("/api/costumes", costumesRouter);
 app.use("/api/bookings", bookingsRouter);
 app.use("/api/admin/costumes", adminCostumesRouter);
+app.use("/api/admin/upload", adminUploadRouter);
 
 export default app;

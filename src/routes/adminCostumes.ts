@@ -1,44 +1,76 @@
-import { Router } from 'express';
-import { Costume } from '../models/Costume';
-import { AdminLog } from '../models/AdminLog';
-import { adminAuth } from "../middlewares/adminAuth";
+import { Router } from "express";
+import { Costume } from "../models/Costume";
+import { AdminLog } from "../models/AdminLog";
+import { adminAuthByTg } from "../middlewares/adminAuthByTg";
+
 const router = Router();
-router.use(adminAuth);
-// Простая "админ-аутентификация" через заголовок x-admin-token === process.env.ADMIN_CHAT_ID
-router.use((req, res, next) => {
-  const token = req.header('x-admin-token');
-  if (!token || token !== process.env.ADMIN_CHAT_ID) {
-    return res.status(403).json({ error: 'Forbidden' });
+
+// ✅ Проверка прав администратора по Telegram ID (из заголовка x-tg-id)
+router.use(adminAuthByTg);
+
+// 🟢 Получить все костюмы
+router.get("/", async (_req, res) => {
+  try {
+    const list = await Costume.find().lean();
+    res.json(list);
+  } catch (err) {
+    console.error("GET /api/admin/costumes error:", err);
+    res.status(500).json({ error: "Server error" });
   }
-  next();
 });
 
-// GET all costumes (admin)
-router.get('/', async (req, res) => {
-  const list = await Costume.find().lean();
-  res.json(list);
-});
-
-// CREATE
+// 🟢 Создать костюм
 router.post("/", async (req, res) => {
-  const payload = req.body;
-  const created = await Costume.create(payload);
-  await AdminLog.create({ action: "create_costume", adminTgId: undefined, details: created });
-  res.json(created);
+  try {
+    const created = await Costume.create(req.body);
+    await AdminLog.create({
+      adminTgId: (req as any).adminUser?.tgId,
+      action: "create_costume",
+      details: created,
+    });
+    res.json(created);
+  } catch (err) {
+    console.error("POST /api/admin/costumes error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
-// UPDATE
+// 🟢 Обновить костюм
 router.put("/:id", async (req, res) => {
-  const updated = await Costume.findByIdAndUpdate(req.params.id, req.body, { new: true });
-  await AdminLog.create({ action: "update_costume", details: updated });
-  res.json(updated);
+  try {
+    const updated = await Costume.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!updated) return res.status(404).json({ error: "Costume not found" });
+
+    await AdminLog.create({
+      adminTgId: (req as any).adminUser?.tgId,
+      action: "update_costume",
+      details: updated,
+    });
+
+    res.json(updated);
+  } catch (err) {
+    console.error("PUT /api/admin/costumes/:id error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
-// DELETE
+// 🟢 Удалить костюм
 router.delete("/:id", async (req, res) => {
-  const removed = await Costume.findByIdAndDelete(req.params.id);
-  await AdminLog.create({ action: "delete_costume", details: removed });
-  res.json({ ok: true });
+  try {
+    const removed = await Costume.findByIdAndDelete(req.params.id);
+    if (!removed) return res.status(404).json({ error: "Costume not found" });
+
+    await AdminLog.create({
+      adminTgId: (req as any).adminUser?.tgId,
+      action: "delete_costume",
+      details: removed,
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("DELETE /api/admin/costumes/:id error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
 export default router;
