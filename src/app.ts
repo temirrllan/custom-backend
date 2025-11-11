@@ -22,7 +22,7 @@ app.get("/", (req, res) => {
   res.send("Nadezhda backend is up ✅");
 });
 const uploadsPath = path.join(__dirname, "..", "uploads");
-app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
+app.use("/uploads", express.static(path.join(__dirname, "../public/uploads")));
 app.use("/api/admin/bookings", adminBookingsRouter);
 // admin upload route
 app.use("/api/costumes", costumesRouter);
