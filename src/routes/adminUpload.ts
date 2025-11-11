@@ -7,10 +7,14 @@ import { AdminLog } from "../models/AdminLog";
 
 const router = Router();
 
-// 📁 Папка для хранения файлов (внутри public, чтобы файлы не удалялись)
-const uploadsDir = path.join(__dirname, "..", "..", "public", "uploads");
+// 📁 ВАЖНО: Папка для хранения файлов теперь СНАРУЖИ проекта
+// Это гарантирует, что файлы не удалятся при пересборке
+const uploadsDir = path.join(__dirname, "..", "..", "..", "uploads");
+
+// Создаём папку, если её нет
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log("✅ Создана папка для загрузок:", uploadsDir);
 }
 
 // ⚙️ Настройки Multer
@@ -25,7 +29,15 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 2 * 1024 * 1024 }, // максимум 2MB
+  limits: { fileSize: 5 * 1024 * 1024 }, // увеличили до 5MB
+  fileFilter: (_req, file, cb) => {
+    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Разрешены только JPG, PNG и WebP"));
+    }
+  },
 }).array("photos", 5); // до 5 файлов
 
 // 🟢 Загрузка фотографий (только для админов)
@@ -38,22 +50,23 @@ router.post("/", adminAuthByTg, (req, res) => {
       }
 
       const files = (req as any).files || [];
-      const baseUrl =
-        process.env.API_URL || // например, https://myserver.ru
-        `${req.protocol}://${req.get("host")}`;
+      
+      if (files.length === 0) {
+        return res.status(400).json({ error: "Файлы не загружены" });
+      }
 
-      // 🧩 Сохраняем относительный и полный URL
+      // 🧩 Сохраняем только относительные пути (начинаются с /uploads/)
       const urls = files.map((f: any) => `/uploads/${f.filename}`);
-const fullUrls = urls.map((u: string) => `${baseUrl}${u}`);
 
       // 📜 Лог
       await AdminLog.create({
         adminTgId: (req as any).adminUser?.tgId,
         action: "upload_photos",
-        details: { count: urls.length, urls: fullUrls },
+        details: { count: urls.length, files: files.map((f: any) => f.filename) },
       });
 
-      res.json({ urls }); // сохраняем относительные ссылки в БД (лучше)
+      console.log(`✅ Загружено ${urls.length} фото:`, urls);
+      res.json({ urls });
     } catch (e) {
       console.error("POST /api/admin/upload error:", e);
       res.status(500).json({ error: "Ошибка сервера" });
