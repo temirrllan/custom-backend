@@ -11,7 +11,9 @@ export interface IBooking extends Document {
   childName?: string;
   childAge?: number;
   childHeight?: number;
-  status: 'new'|'confirmed'|'cancelled'|'completed';
+  status: 'new' | 'confirmed' | 'cancelled' | 'completed';
+  type: 'online' | 'offline'; // 🆕 Тип брони
+  returnDate?: Date; // 🆕 Когда должен вернуть костюм
   googleSheetRowLink?: string;
 }
 
@@ -26,6 +28,8 @@ const BookingSchema = new Schema<IBooking>({
   childAge: Number,
   childHeight: Number,
   status: { type: String, default: 'new' },
+  type: { type: String, enum: ['online', 'offline'], default: 'online' }, // 🆕
+  returnDate: Date, // 🆕
   googleSheetRowLink: String
 }, { timestamps: true });
 

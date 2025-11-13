@@ -11,7 +11,7 @@ import adminBookingsRouter from "./routes/adminBookings";
 import adminLogsRouter from "./routes/adminLogs";
 import usersRouter from "./routes/users";
 import userRoutes from "./routes/users";
-
+import adminStockRouter from "./routes/adminStock";
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
@@ -34,5 +34,6 @@ app.use("/api/admin/costumes", adminCostumesRouter);
 app.use("/api/admin/upload", adminUploadRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/users", userRoutes);
+app.use("/api/admin/stock", adminStockRouter);
 
 export default app;

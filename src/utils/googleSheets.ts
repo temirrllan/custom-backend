@@ -1,4 +1,3 @@
-// backend/src/utils/googleSheets.ts
 import { google } from "googleapis";
 
 interface AppendData {
@@ -8,9 +7,10 @@ interface AppendData {
   costumeTitle: string;
   size: string;
   childName?: string;
-  childAge?: string;
-  childHeight?: string;
+  childAge?: string | number;
+  childHeight?: string | number;
   status: string;
+  stock?: number; // 🆕 остаток на складе
 }
 
 export async function appendBookingToSheet(data: AppendData): Promise<string> {
@@ -25,10 +25,8 @@ export async function appendBookingToSheet(data: AppendData): Promise<string> {
     );
   }
 
-  // Преобразуем приватный ключ (заменяем \n на реальные переводы строк)
   const private_key = raw_private_key.replace(/\\n/g, "\n");
 
-  // Авторизация в Google API
   const jwtClient = new google.auth.JWT({
     email: client_email,
     key: private_key,
@@ -39,7 +37,7 @@ export async function appendBookingToSheet(data: AppendData): Promise<string> {
 
   const sheets = google.sheets({ version: "v4", auth: jwtClient });
 
-  // Формируем строку данных в нужном порядке
+  // 🆕 Добавили колонку "Остаток" в конец
   const values = [
     [
       data.date || new Date().toLocaleString("ru-RU"),
@@ -51,17 +49,16 @@ export async function appendBookingToSheet(data: AppendData): Promise<string> {
       data.childAge || "",
       data.childHeight || "",
       data.status || "new",
+      data.stock !== undefined ? data.stock : "", // 🆕 остаток
     ],
   ];
 
-  // Добавляем строку в таблицу
   await sheets.spreadsheets.values.append({
     spreadsheetId: sheetId,
-    range: `${sheetName}!A:I`, // 9 колонок
+    range: `${sheetName}!A:J`, // 🆕 теперь 10 колонок (было 9)
     valueInputOption: "USER_ENTERED",
     requestBody: { values },
   });
 
-  // Возвращаем ссылку на таблицу
   return `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
 }

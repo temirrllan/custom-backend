@@ -8,7 +8,7 @@ import { bookingRateLimit } from "../middlewares/bookingRateLimit";
 
 const router = Router();
 
-// POST /api/bookings
+// POST /api/bookings - создание брони с уменьшением стока
 router.post("/", bookingRateLimit, async (req, res) => {
   try {
     const {
@@ -23,18 +23,32 @@ router.post("/", bookingRateLimit, async (req, res) => {
     } = req.body;
 
     if (!userTgId || !clientName || !phone || !costumeId || !size) {
-      return res.status(400).json({ error: "Missing required fields" });
+      return res.status(400).json({ error: "Не заполнены обязательные поля" });
     }
 
     if (!validatePhone(phone)) {
       return res
         .status(400)
-        .json({ error: "Invalid phone format. Use +7XXXXXXXXXX" });
+        .json({ error: "Неверный формат телефона. Используйте +7XXXXXXXXXX" });
     }
 
-    const costume = await Costume.findById(costumeId);
-    if (!costume)
-      return res.status(404).json({ error: "Costume not found" });
+    // 🔒 Атомарное уменьшение стока (защита от гонки данных)
+    const costume = await Costume.findOneAndUpdate(
+      {
+        _id: costumeId,
+        [`stockBySize.${size}`]: { $gt: 0 } // только если сток > 0
+      },
+      {
+        $inc: { [`stockBySize.${size}`]: -1 } // уменьшаем на 1
+      },
+      { new: true }
+    );
+
+    if (!costume) {
+      return res.status(400).json({ 
+        error: `❌ Размер "${size}" закончился или не существует` 
+      });
+    }
 
     // Создание бронирования
     const booking = await Booking.create({
@@ -48,6 +62,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
       childAge,
       childHeight,
       status: "new",
+      type: "online", // 🆕 помечаем как онлайн-бронь
     });
 
     // Добавление в Google Sheets
@@ -63,6 +78,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
         childAge,
         childHeight,
         status: "Новая заявка",
+        stock: costume.stockBySize?.[size] || 0, // 🆕 остаток
       });
       booking.googleSheetRowLink = sheetLink;
       await booking.save();
@@ -79,6 +95,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
         `📞 *Телефон:* ${phone}\n` +
         `🧥 *Костюм:* ${costume.title}\n` +
         `📏 *Размер:* ${size}\n` +
+        `📦 *Осталось:* ${costume.stockBySize?.[size] || 0} шт.\n` +
         (childName ? `👶 *Имя ребёнка:* ${childName}\n` : "") +
         (childAge ? `🎂 *Возраст:* ${childAge} лет\n` : "") +
         (childHeight ? `📐 *Рост:* ${childHeight} см\n\n` : "\n") +
@@ -87,9 +104,8 @@ router.post("/", bookingRateLimit, async (req, res) => {
 
       try {
         await bot.api.sendMessage(Number(adminId), message, {
-  parse_mode: "Markdown",
-});
-
+          parse_mode: "Markdown",
+        });
       } catch (e) {
         console.warn("⚠️ Ошибка отправки уведомления админу:", e);
       }
@@ -98,7 +114,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
     res.json(booking);
   } catch (err) {
     console.error("POST /api/bookings error", err);
-    res.status(500).json({ error: "Server error" });
+    res.status(500).json({ error: "Ошибка сервера" });
   }
 });
 
