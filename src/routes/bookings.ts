@@ -161,6 +161,7 @@ router.put("/:id/cancel", async (req, res) => {
     });
 
     // Меняем статус
+    const oldStatus = booking.status;
     booking.status = "cancelled";
     await booking.save();
 
@@ -169,6 +170,30 @@ router.put("/:id/cancel", async (req, res) => {
       await updateBookingByIdInSheet(String(booking._id), "Отменено");
     } catch (err) {
       console.warn("❗ Google Sheets update failed:", err);
+    }
+
+    // 🆕 Уведомление админу об отмене
+    const adminId = process.env.ADMIN_CHAT_ID;
+    if (adminId) {
+      const message =
+        `❌ *Заказ отменён пользователем*\n\n` +
+        `👤 *Клиент:* ${booking.clientName}\n` +
+        `📞 *Телефон:* ${booking.phone}\n` +
+        `🧥 *Костюм:* ${booking.costumeTitle}\n` +
+        `📏 *Размер:* ${booking.size}\n` +
+        `📅 *Дата заказа:* ${new Date(booking.createdAt).toLocaleString("ru-RU")}\n` +
+        `📅 *Дата отмены:* ${new Date().toLocaleString("ru-RU")}\n\n` +
+        `🔄 *Статус изменён:* ${oldStatus} → cancelled\n` +
+        `📦 *Сток возвращён:* +1 к размеру ${booking.size}\n\n` +
+        `🆔 ID заявки: \`${booking._id}\``;
+
+      try {
+        await bot.api.sendMessage(Number(adminId), message, {
+          parse_mode: "Markdown",
+        });
+      } catch (e) {
+        console.warn("⚠️ Ошибка отправки уведомления админу:", e);
+      }
     }
 
     console.log(`✅ Заказ ${booking._id} отменён пользователем ${tgId}`);
