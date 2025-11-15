@@ -3,7 +3,7 @@ import { Booking } from "../models/Booking";
 import { Costume } from "../models/Costume";
 import { validatePhone } from "../utils/validatePhone";
 import { bot } from "../bot/bot";
-import { appendBookingToSheet, updateBookingStatusInSheet } from "../utils/googleSheets";
+import { appendBookingWithId, updateBookingByIdInSheet } from "../utils/googleSheets";
 import { bookingRateLimit } from "../middlewares/bookingRateLimit";
 
 const router = Router();
@@ -65,11 +65,11 @@ router.post("/", bookingRateLimit, async (req, res) => {
       type: "online",
     });
 
-    // Добавление в Google Sheets
+    // Добавление в Google Sheets (с ID заказа)
     let sheetLink = "";
     try {
-      sheetLink = await appendBookingToSheet({
-        bookingId: String(booking._id), // ✅ Исправлено: явное приведение к строке
+      sheetLink = await appendBookingWithId({
+        bookingId: String(booking._id),
         date: new Date().toLocaleString("ru-RU"),
         clientName,
         phone,
@@ -119,7 +119,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
   }
 });
 
-// 🆕 GET /api/bookings/my - получить заказы пользователя
+// GET /api/bookings/my - получить заказы пользователя
 router.get("/my", async (req, res) => {
   try {
     const tgId = Number(req.header("x-tg-id"));
@@ -136,7 +136,7 @@ router.get("/my", async (req, res) => {
   }
 });
 
-// 🆕 PUT /api/bookings/:id/cancel - отменить заказ
+// PUT /api/bookings/:id/cancel - отменить заказ
 router.put("/:id/cancel", async (req, res) => {
   try {
     const tgId = Number(req.header("x-tg-id"));
@@ -164,9 +164,9 @@ router.put("/:id/cancel", async (req, res) => {
     booking.status = "cancelled";
     await booking.save();
 
-    // 🆕 Обновляем Google Sheets
+    // Обновляем Google Sheets
     try {
-      await updateBookingStatusInSheet(String(booking._id), "Отменено"); // ✅ Исправлено
+      await updateBookingByIdInSheet(String(booking._id), "Отменено");
     } catch (err) {
       console.warn("❗ Google Sheets update failed:", err);
     }
