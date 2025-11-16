@@ -17,12 +17,13 @@ router.post("/", bookingRateLimit, async (req, res) => {
       phone,
       costumeId,
       size,
+      bookingDate, // 🆕 Дата бронирования
       childName,
       childAge,
       childHeight,
     } = req.body;
 
-    if (!userTgId || !clientName || !phone || !costumeId || !size) {
+    if (!userTgId || !clientName || !phone || !costumeId || !size || !bookingDate) {
       return res.status(400).json({ error: "Не заполнены обязательные поля" });
     }
 
@@ -30,6 +31,32 @@ router.post("/", bookingRateLimit, async (req, res) => {
       return res
         .status(400)
         .json({ error: "Неверный формат телефона. Используйте +7XXXXXXXXXX" });
+    }
+
+    // Проверяем, что дата не в прошлом
+    const selectedDate = new Date(bookingDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    if (selectedDate < today) {
+      return res.status(400).json({ error: "Нельзя забронировать прошедшую дату" });
+    }
+
+    // 🔒 Проверяем, что эта дата не занята для этого костюма и размера
+    const existingBooking = await Booking.findOne({
+      costumeId,
+      size,
+      bookingDate: {
+        $gte: new Date(selectedDate.setHours(0, 0, 0, 0)),
+        $lt: new Date(selectedDate.setHours(23, 59, 59, 999)),
+      },
+      status: { $in: ["new", "confirmed"] },
+    });
+
+    if (existingBooking) {
+      return res.status(400).json({
+        error: "❌ Эта дата уже занята для выбранного размера. Выберите другой день.",
+      });
     }
 
     // 🔒 Атомарное уменьшение стока
@@ -58,6 +85,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
       costumeId,
       costumeTitle: costume.title,
       size,
+      bookingDate: new Date(bookingDate), // 🆕
       childName,
       childAge,
       childHeight,
@@ -65,12 +93,13 @@ router.post("/", bookingRateLimit, async (req, res) => {
       type: "online",
     });
 
-    // Добавление в Google Sheets (с ID заказа)
+    // Добавление в Google Sheets (с датой бронирования)
     let sheetLink = "";
     try {
       sheetLink = await appendBookingWithId({
         bookingId: String(booking._id),
-        date: new Date().toLocaleString("ru-RU"),
+        date: new Date().toLocaleString("ru-RU"), // Дата создания заявки
+        bookingDate: new Date(bookingDate).toLocaleDateString("ru-RU"), // 🆕 Дата бронирования
         clientName,
         phone,
         costumeTitle: costume.title,
@@ -87,7 +116,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
       console.warn("❗ Google Sheets append failed:", err);
     }
 
-    // Уведомление администратору
+    // 🆕 Уведомление администратору (с датой аренды)
     const adminId = process.env.ADMIN_CHAT_ID;
     if (adminId) {
       const message =
@@ -96,6 +125,11 @@ router.post("/", bookingRateLimit, async (req, res) => {
         `📞 *Телефон:* ${phone}\n` +
         `🧥 *Костюм:* ${costume.title}\n` +
         `📏 *Размер:* ${size}\n` +
+        `📅 *Дата аренды:* ${new Date(bookingDate).toLocaleDateString("ru-RU", { 
+          day: "numeric", 
+          month: "long", 
+          year: "numeric" 
+        })}\n` + // 🆕
         `📦 *Осталось:* ${costume.stockBySize?.[size] || 0} шт.\n` +
         (childName ? `👶 *Имя ребёнка:* ${childName}\n` : "") +
         (childAge ? `🎂 *Возраст:* ${childAge} лет\n` : "") +
@@ -110,6 +144,27 @@ router.post("/", bookingRateLimit, async (req, res) => {
       } catch (e) {
         console.warn("⚠️ Ошибка отправки уведомления админу:", e);
       }
+    }
+
+    // 🆕 Уведомление пользователю (без персональных данных)
+    try {
+      const userMessage =
+        `✅ *Ваша заявка успешно оформлена!*\n\n` +
+        `🧥 *Костюм:* ${costume.title}\n` +
+        `📏 *Размер:* ${size}\n` +
+        `📅 *Дата аренды:* ${new Date(bookingDate).toLocaleDateString("ru-RU", { 
+          day: "numeric", 
+          month: "long", 
+          year: "numeric" 
+        })}\n\n` +
+        `Мы свяжемся с вами для подтверждения.\n` +
+        `Спасибо за ваш заказ! 🎉`;
+
+      await bot.api.sendMessage(userTgId, userMessage, {
+        parse_mode: "Markdown",
+      });
+    } catch (e) {
+      console.warn("⚠️ Ошибка отправки уведомления пользователю:", e);
     }
 
     res.json(booking);
@@ -145,12 +200,10 @@ router.put("/:id/cancel", async (req, res) => {
     const booking = await Booking.findById(req.params.id);
     if (!booking) return res.status(404).json({ error: "Booking not found" });
 
-    // Проверяем, что это заказ пользователя
     if (booking.userTgId !== tgId) {
       return res.status(403).json({ error: "Forbidden" });
     }
 
-    // Нельзя отменить уже отменённый или завершённый заказ
     if (booking.status === "cancelled" || booking.status === "completed") {
       return res.status(400).json({ error: "Этот заказ уже завершён или отменён" });
     }
@@ -160,7 +213,6 @@ router.put("/:id/cancel", async (req, res) => {
       $inc: { [`stockBySize.${booking.size}`]: 1 },
     });
 
-    // Меняем статус
     const oldStatus = booking.status;
     booking.status = "cancelled";
     await booking.save();
@@ -172,7 +224,7 @@ router.put("/:id/cancel", async (req, res) => {
       console.warn("❗ Google Sheets update failed:", err);
     }
 
-    // 🆕 Уведомление админу об отмене
+    // Уведомление админу об отмене
     const adminId = process.env.ADMIN_CHAT_ID;
     if (adminId) {
       const message =
@@ -181,6 +233,7 @@ router.put("/:id/cancel", async (req, res) => {
         `📞 *Телефон:* ${booking.phone}\n` +
         `🧥 *Костюм:* ${booking.costumeTitle}\n` +
         `📏 *Размер:* ${booking.size}\n` +
+        `📅 *Дата аренды:* ${new Date(booking.bookingDate).toLocaleDateString("ru-RU")}\n` +
         `📅 *Дата заказа:* ${new Date(booking.createdAt).toLocaleString("ru-RU")}\n` +
         `📅 *Дата отмены:* ${new Date().toLocaleString("ru-RU")}\n\n` +
         `🔄 *Статус изменён:* ${oldStatus} → cancelled\n` +

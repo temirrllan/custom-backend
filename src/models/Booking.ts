@@ -13,10 +13,11 @@ export interface IBooking extends Document {
   childHeight?: number;
   status: 'new' | 'confirmed' | 'cancelled' | 'completed';
   type: 'online' | 'offline';
+  bookingDate: Date; // 🆕 Дата бронирования (когда клиент хочет получить костюм)
   returnDate?: Date;
   googleSheetRowLink?: string;
-  createdAt: Date; // ✅ Добавлено
-  updatedAt: Date; // ✅ Добавлено
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 const BookingSchema = new Schema<IBooking>({
@@ -31,8 +32,9 @@ const BookingSchema = new Schema<IBooking>({
   childHeight: Number,
   status: { type: String, default: 'new' },
   type: { type: String, enum: ['online', 'offline'], default: 'online' },
+  bookingDate: { type: Date, required: true }, // 🆕 Обязательное поле
   returnDate: Date,
   googleSheetRowLink: String
-}, { timestamps: true }); // ✅ Автоматически добавляет createdAt и updatedAt
+}, { timestamps: true });
 
 export const Booking = model<IBooking>('Booking', BookingSchema);
