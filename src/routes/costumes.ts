@@ -21,26 +21,39 @@ router.get('/:id/booked-dates', async (req, res) => {
     const { id } = req.params;
     const { size } = req.query;
 
-    // Ищем все активные брони (new, confirmed) для этого костюма
-    const filter: any = {
-      costumeId: id,
-      status: { $in: ['new', 'confirmed'] },
-    };
-
-    // Если указан размер — фильтруем по нему
-    if (size) {
-      filter.size = size;
+    if (!size) {
+      return res.status(400).json({ error: 'Size parameter is required' });
     }
 
-    const bookings = await Booking.find(filter).select('bookingDate size').lean();
+    // Получаем костюм, чтобы узнать общее количество
+    const costume = await Costume.findById(id);
+    if (!costume) {
+      return res.status(404).json({ error: 'Costume not found' });
+    }
 
-    // Возвращаем массив занятых дат в формате ISO
-    const bookedDates = bookings.map((b) => ({
-      date: b.bookingDate.toISOString().split('T')[0], // YYYY-MM-DD
-      size: b.size,
-    }));
+    const totalStock = costume.stockBySize?.[size as string] || 0;
 
-    res.json(bookedDates);
+    // Ищем все активные брони для этого костюма и размера
+    const bookings = await Booking.find({
+      costumeId: id,
+      size: size as string,
+      status: { $in: ['new', 'confirmed'] },
+    }).select('bookingDate').lean();
+
+    // Группируем брони по датам и считаем количество
+    const dateCount: Record<string, number> = {};
+    
+    bookings.forEach((b) => {
+      const dateStr = b.bookingDate.toISOString().split('T')[0]; // YYYY-MM-DD
+      dateCount[dateStr] = (dateCount[dateStr] || 0) + 1;
+    });
+
+    // Возвращаем только те даты, где количество броней >= общего количества костюмов
+    const fullyBookedDates = Object.entries(dateCount)
+      .filter(([_, count]) => count >= totalStock)
+      .map(([date, _]) => ({ date, size: size as string }));
+
+    res.json(fullyBookedDates);
   } catch (err) {
     console.error('GET /api/costumes/:id/booked-dates error', err);
     res.status(500).json({ error: 'Server error' });

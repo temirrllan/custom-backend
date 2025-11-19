@@ -17,7 +17,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
       phone,
       costumeId,
       size,
-      bookingDate, // 🆕 Дата бронирования
+      bookingDate,
       childName,
       childAge,
       childHeight,
@@ -42,38 +42,42 @@ router.post("/", bookingRateLimit, async (req, res) => {
       return res.status(400).json({ error: "Нельзя забронировать прошедшую дату" });
     }
 
-    // 🔒 Проверяем, что эта дата не занята для этого костюма и размера
-    const existingBooking = await Booking.findOne({
-      costumeId,
-      size,
-      bookingDate: {
-        $gte: new Date(selectedDate.setHours(0, 0, 0, 0)),
-        $lt: new Date(selectedDate.setHours(23, 59, 59, 999)),
-      },
-      status: { $in: ["new", "confirmed"] },
-    });
+    // Получаем костюм
+    const costume = await Costume.findById(costumeId);
+    if (!costume) {
+      return res.status(404).json({ error: "Костюм не найден" });
+    }
 
-    if (existingBooking) {
+    // 🔒 Проверяем общее количество костюмов этого размера
+    const totalStock = costume.stockBySize?.[size] || 0;
+    
+    if (totalStock === 0) {
       return res.status(400).json({
-        error: "❌ Эта дата уже занята для выбранного размера. Выберите другой день.",
+        error: `❌ Размер "${size}" закончился`,
       });
     }
 
-    // 🔒 Атомарное уменьшение стока
-    const costume = await Costume.findOneAndUpdate(
-      {
-        _id: costumeId,
-        [`stockBySize.${size}`]: { $gt: 0 },
-      },
-      {
-        $inc: { [`stockBySize.${size}`]: -1 },
-      },
-      { new: true }
-    );
+    // 🔒 Считаем, сколько уже забронировано на эту дату для этого размера
+    const startOfDay = new Date(selectedDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const endOfDay = new Date(selectedDate);
+    endOfDay.setHours(23, 59, 59, 999);
 
-    if (!costume) {
+    const existingBookingsCount = await Booking.countDocuments({
+      costumeId,
+      size,
+      bookingDate: {
+        $gte: startOfDay,
+        $lte: endOfDay,
+      },
+      status: { $in: ['new', 'confirmed'] },
+    });
+
+    // Если количество броней >= общего количества костюмов → дата занята
+    if (existingBookingsCount >= totalStock) {
       return res.status(400).json({
-        error: `❌ Размер "${size}" закончился или не существует`,
+        error: `❌ Эта дата уже занята для размера "${size}". Выберите другой день.`,
       });
     }
 
@@ -85,7 +89,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
       costumeId,
       costumeTitle: costume.title,
       size,
-      bookingDate: new Date(bookingDate), // 🆕
+      bookingDate: new Date(bookingDate),
       childName,
       childAge,
       childHeight,
@@ -93,13 +97,18 @@ router.post("/", bookingRateLimit, async (req, res) => {
       type: "online",
     });
 
-    // Добавление в Google Sheets (с датой бронирования)
+    // 🔒 Уменьшаем общий сток только ПОСЛЕ успешного создания брони
+    await Costume.findByIdAndUpdate(costumeId, {
+      $inc: { [`stockBySize.${size}`]: -1 },
+    });
+
+    // Добавление в Google Sheets
     let sheetLink = "";
     try {
       sheetLink = await appendBookingWithId({
         bookingId: String(booking._id),
-        date: new Date().toLocaleString("ru-RU"), // Дата создания заявки
-        bookingDate: new Date(bookingDate).toLocaleDateString("ru-RU"), // 🆕 Дата бронирования
+        date: new Date().toLocaleString("ru-RU"),
+        bookingDate: new Date(bookingDate).toLocaleDateString("ru-RU"),
         clientName,
         phone,
         costumeTitle: costume.title,
@@ -108,7 +117,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
         childAge,
         childHeight,
         status: "Новая заявка",
-        stock: costume.stockBySize?.[size] || 0,
+        stock: (costume.stockBySize?.[size] || 0) - 1, // обновлённый остаток
       });
       booking.googleSheetRowLink = sheetLink;
       await booking.save();
@@ -116,7 +125,11 @@ router.post("/", bookingRateLimit, async (req, res) => {
       console.warn("❗ Google Sheets append failed:", err);
     }
 
-    // 🆕 Уведомление администратору (с датой аренды)
+    // Получаем обновлённый остаток
+    const updatedCostume = await Costume.findById(costumeId);
+    const remainingStock = updatedCostume?.stockBySize?.[size] || 0;
+
+    // Уведомление администратору
     const adminId = process.env.ADMIN_CHAT_ID;
     if (adminId) {
       const message =
@@ -129,8 +142,8 @@ router.post("/", bookingRateLimit, async (req, res) => {
           day: "numeric", 
           month: "long", 
           year: "numeric" 
-        })}\n` + // 🆕
-        `📦 *Осталось:* ${costume.stockBySize?.[size] || 0} шт.\n` +
+        })}\n` +
+        `📦 *Осталось:* ${remainingStock} шт.\n` +
         (childName ? `👶 *Имя ребёнка:* ${childName}\n` : "") +
         (childAge ? `🎂 *Возраст:* ${childAge} лет\n` : "") +
         (childHeight ? `📐 *Рост:* ${childHeight} см\n\n` : "\n") +
@@ -146,7 +159,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
       }
     }
 
-    // 🆕 Уведомление пользователю (без персональных данных)
+    // Уведомление пользователю
     try {
       const userMessage =
         `✅ *Ваша заявка успешно оформлена!*\n\n` +
