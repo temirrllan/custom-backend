@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { Booking } from "../models/Booking";
-import { Costume } from "../models/Costume";
 import { AdminLog } from "../models/AdminLog";
 import { adminAuthByTg } from "../middlewares/adminAuthByTg";
 
@@ -22,7 +21,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-// 🟢 Изменить статус заявки (с возвратом стока при отмене/завершении)
+// 🟢 Изменить статус заявки (БЕЗ возврата стока)
 router.put("/:id/status", async (req, res) => {
   try {
     const { status } = req.body;
@@ -34,16 +33,16 @@ router.put("/:id/status", async (req, res) => {
     const oldStatus = booking.status;
     booking.status = status;
 
-    // 🔄 Логика возврата стока
-    if (oldStatus !== "cancelled" && oldStatus !== "completed") {
-      // Если меняем на "отменена" или "завершена" → возвращаем сток
-      if (status === "cancelled" || status === "completed") {
-        await Costume.findByIdAndUpdate(booking.costumeId, {
-          $inc: { [`stockBySize.${booking.size}`]: 1 }
-        });
-        console.log(`✅ Возвращён сток: ${booking.costumeTitle}, размер ${booking.size}`);
-      }
-    }
+    // ❌ УБРАЛИ: Больше НЕ возвращаем сток при изменении статуса
+    // Сток не уменьшается при бронировании, поэтому и не увеличиваем при отмене/завершении
+    // if (oldStatus !== "cancelled" && oldStatus !== "completed") {
+    //   if (status === "cancelled" || status === "completed") {
+    //     await Costume.findByIdAndUpdate(booking.costumeId, {
+    //       $inc: { [`stockBySize.${booking.size}`]: 1 }
+    //     });
+    //     console.log(`✅ Возвращён сток: ${booking.costumeTitle}, размер ${booking.size}`);
+    //   }
+    // }
 
     await booking.save();
 
@@ -52,6 +51,8 @@ router.put("/:id/status", async (req, res) => {
       action: "update_booking_status",
       details: { bookingId: booking._id, oldStatus, newStatus: status },
     });
+
+    console.log(`✅ Статус брони ${booking._id} изменён: ${oldStatus} → ${status}`);
 
     res.json(booking);
   } catch (err) {

@@ -20,10 +20,9 @@ router.get('/', async (req, res) => {
  * 
  * Возвращает список дат, которые заблокированы для бронирования
  * 
- * Логика:
- * - Для каждой активной брони получаем pickupDate и returnDate
- * - Блокируем все даты в этом диапазоне
- * - Учитываем количество экземпляров костюма
+ * Новая логика:
+ * - Для каждой даты считаем, сколько активных броней пересекаются с периодом этой даты
+ * - Блокируем дату только если количество пересечений >= общего количества экземпляров
  */
 router.get('/:id/booked-dates', async (req, res) => {
   try {
@@ -57,37 +56,75 @@ router.get('/:id/booked-dates', async (req, res) => {
     console.log(`📦 [BLOCKED_DATES] Всего экземпляров: ${totalStock}`);
     console.log(`📊 [BLOCKED_DATES] Активных броней: ${bookings.length}`);
 
-    // Группируем даты по дням и считаем количество броней в каждый день
-    const dateCounts: Map<string, number> = new Map();
+    if (bookings.length === 0) {
+      console.log(`✅ [BLOCKED_DATES] Нет активных броней - все даты свободны`);
+      return res.json([]);
+    }
 
+    // Функция проверки пересечения периодов
+    const periodsOverlap = (
+      start1: Date, 
+      end1: Date, 
+      start2: Date, 
+      end2: Date
+    ): boolean => {
+      return start1.getTime() <= end2.getTime() && end1.getTime() >= start2.getTime();
+    };
+
+    // Собираем все уникальные даты из броней
+    const allDates = new Set<string>();
     for (const booking of bookings) {
-      // Получаем все даты в диапазоне [pickupDate, returnDate]
       const pickup = new Date(booking.pickupDate);
       const returnD = new Date(booking.returnDate);
       
-      // Сбрасываем время для корректного сравнения
       pickup.setHours(0, 0, 0, 0);
       returnD.setHours(0, 0, 0, 0);
       
-      // Добавляем все даты в диапазоне
       const current = new Date(pickup);
       while (current <= returnD) {
-        const dateStr = current.toISOString().split('T')[0]; // YYYY-MM-DD
-        dateCounts.set(dateStr, (dateCounts.get(dateStr) || 0) + 1);
+        allDates.add(current.toISOString().split('T')[0]);
         current.setDate(current.getDate() + 1);
       }
     }
 
-    // Возвращаем только те даты, где количество броней >= общего количества экземпляров
+    console.log(`📅 [BLOCKED_DATES] Уникальных дат в бронях: ${allDates.size}`);
+
+    // Для каждой уникальной даты проверяем, сколько броней её занимают
     const blockedDates: Array<{ date: string; size: string }> = [];
-    
-    for (const [date, count] of dateCounts.entries()) {
-      if (count >= totalStock) {
-        blockedDates.push({ date, size: size as string });
+
+    for (const dateStr of allDates) {
+      // Создаём период для этой даты (с учётом правил выдачи/возврата)
+      const eventDate = new Date(dateStr);
+      eventDate.setHours(0, 0, 0, 0);
+      
+      const pickupForDate = new Date(eventDate);
+      pickupForDate.setDate(pickupForDate.getDate() - 1);
+      pickupForDate.setHours(17, 0, 0, 0);
+      
+      const returnForDate = new Date(eventDate);
+      returnForDate.setHours(17, 0, 0, 0);
+
+      // Считаем, сколько броней пересекаются с этим периодом
+      let conflictCount = 0;
+      for (const booking of bookings) {
+        const bookingPickup = new Date(booking.pickupDate);
+        const bookingReturn = new Date(booking.returnDate);
+        
+        if (periodsOverlap(pickupForDate, returnForDate, bookingPickup, bookingReturn)) {
+          conflictCount++;
+        }
+      }
+
+      // Блокируем дату только если все экземпляры заняты
+      if (conflictCount >= totalStock) {
+        blockedDates.push({ date: dateStr, size: size as string });
+        console.log(`🔒 [BLOCKED_DATES] ${dateStr}: ${conflictCount}/${totalStock} - ЗАБЛОКИРОВАНО`);
+      } else {
+        console.log(`✅ [BLOCKED_DATES] ${dateStr}: ${conflictCount}/${totalStock} - свободно`);
       }
     }
 
-    console.log(`🔒 [BLOCKED_DATES] Заблокировано дат: ${blockedDates.length}`);
+    console.log(`🔒 [BLOCKED_DATES] Итого заблокировано дат: ${blockedDates.length}`);
 
     res.json(blockedDates);
   } catch (err) {

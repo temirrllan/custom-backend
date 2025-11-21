@@ -111,6 +111,17 @@ router.post("/", bookingRateLimit, async (req, res) => {
     console.log(`📅 [BOOKING] Выдача: ${pickupDate.toLocaleString("ru-RU")}`);
     console.log(`📅 [BOOKING] Возврат: ${returnDate.toLocaleString("ru-RU")}`);
 
+    // 🆕 Получаем общее количество экземпляров этого размера
+    const totalStock = costume.stockBySize?.[size] || 0;
+    
+    if (totalStock === 0) {
+      return res.status(400).json({
+        error: `❌ Размер "${size}" отсутствует в наличии`,
+      });
+    }
+
+    console.log(`📦 [BOOKING] Всего экземпляров размера ${size}: ${totalStock}`);
+
     // 🆕 Получаем все активные брони для этого костюма и размера
     const activeBookings = await Booking.find({
       costumeId,
@@ -120,17 +131,25 @@ router.post("/", bookingRateLimit, async (req, res) => {
 
     console.log(`📊 [BOOKING] Найдено активных броней: ${activeBookings.length}`);
 
-    // 🆕 Проверяем конфликты
-    const hasConflict = hasBookingConflict(activeBookings, pickupDate, returnDate);
+    // 🆕 Проверяем, сколько броней конфликтуют с новым периодом
+    let conflictCount = 0;
+    for (const booking of activeBookings) {
+      if (hasBookingConflict([booking], pickupDate, returnDate)) {
+        conflictCount++;
+      }
+    }
 
-    if (hasConflict) {
-      console.log(`❌ [BOOKING] ОТКЛОНЕНО: Обнаружен конфликт дат`);
+    console.log(`⚠️ [BOOKING] Конфликтующих броней: ${conflictCount} из ${totalStock} доступных`);
+
+    // 🆕 Проверяем: если количество конфликтов >= общего количества экземпляров → отклоняем
+    if (conflictCount >= totalStock) {
+      console.log(`❌ [BOOKING] ОТКЛОНЕНО: Все ${totalStock} экземпляров заняты в этот период`);
       return res.status(400).json({
-        error: `❌ К сожалению, этот костюм (размер ${size}) недоступен в выбранный период. Пожалуйста, выберите другую дату.`,
+        error: `❌ К сожалению, все костюмы этого размера (${size}) заняты в выбранный период. Пожалуйста, выберите другую дату.`,
       });
     }
 
-    console.log(`✅ [BOOKING] РАЗРЕШЕНО: Конфликтов не обнаружено`);
+    console.log(`✅ [BOOKING] РАЗРЕШЕНО: Доступно ${totalStock - conflictCount} из ${totalStock} экземпляров`);
 
     // Получаем текущий сток (для информации)
     const currentStock = costume.stockBySize?.[size] || 0;
