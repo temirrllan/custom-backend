@@ -8,7 +8,63 @@ import { bookingRateLimit } from "../middlewares/bookingRateLimit";
 
 const router = Router();
 
-// POST /api/bookings - создание брони с уменьшением стока
+/**
+ * 🆕 Вспомогательная функция: проверка конфликтов броней
+ * 
+ * Логика:
+ * - pickupDate: день до события, 17:00-19:00
+ * - returnDate: день события, до 17:00
+ * 
+ * Конфликт возникает, если периоды [pickup, return] пересекаются
+ */
+function hasBookingConflict(
+  existingBookings: Array<{ pickupDate: Date; returnDate: Date }>,
+  newPickup: Date,
+  newReturn: Date
+): boolean {
+  for (const booking of existingBookings) {
+    const existingPickup = new Date(booking.pickupDate);
+    const existingReturn = new Date(booking.returnDate);
+    
+    // Проверяем пересечение периодов
+    // Конфликт есть, если:
+    // 1. Новая выдача попадает в период существующей брони
+    // 2. Новый возврат попадает в период существующей брони
+    // 3. Новая бронь полностью покрывает существующую
+    
+    const newPickupTime = newPickup.getTime();
+    const newReturnTime = newReturn.getTime();
+    const existingPickupTime = existingPickup.getTime();
+    const existingReturnTime = existingReturn.getTime();
+    
+    // Периоды пересекаются, если:
+    // (начало1 <= конец2) И (конец1 >= начало2)
+    if (newPickupTime <= existingReturnTime && newReturnTime >= existingPickupTime) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * 🆕 Вспомогательная функция: расчёт дат выдачи и возврата
+ */
+function calculateBookingDates(eventDate: Date): {
+  pickupDate: Date;
+  returnDate: Date;
+} {
+  const pickup = new Date(eventDate);
+  pickup.setDate(pickup.getDate() - 1); // За 1 день до
+  pickup.setHours(17, 0, 0, 0);        // 17:00
+  
+  const returnD = new Date(eventDate);
+  returnD.setHours(17, 0, 0, 0);       // До 17:00 в день события
+  
+  return { pickupDate: pickup, returnDate: returnD };
+}
+
+// POST /api/bookings - создание брони
 router.post("/", bookingRateLimit, async (req, res) => {
   try {
     const {
@@ -17,7 +73,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
       phone,
       costumeId,
       size,
-      bookingDate,
+      bookingDate,  // Дата мероприятия
       childName,
       childAge,
       childHeight,
@@ -34,11 +90,11 @@ router.post("/", bookingRateLimit, async (req, res) => {
     }
 
     // Проверяем, что дата не в прошлом
-    const selectedDate = new Date(bookingDate);
+    const eventDate = new Date(bookingDate);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    if (selectedDate < today) {
+    if (eventDate < today) {
       return res.status(400).json({ error: "Нельзя забронировать прошедшую дату" });
     }
 
@@ -48,68 +104,36 @@ router.post("/", bookingRateLimit, async (req, res) => {
       return res.status(404).json({ error: "Костюм не найден" });
     }
 
-    // 🔒 ВАЖНО: Получаем ИЗНАЧАЛЬНОЕ общее количество (до уменьшения стока)
-    // Это количество, которое было когда костюм только создали
-    const currentGeneralStock = costume.stockBySize?.[size] || 0;
-    
-    console.log(`📊 [BOOKING] Костюм: ${costume.title}, Размер: ${size}`);
-    console.log(`📦 [BOOKING] Текущий общий сток: ${currentGeneralStock}`);
+    // 🆕 Рассчитываем даты выдачи и возврата
+    const { pickupDate, returnDate } = calculateBookingDates(eventDate);
 
-    if (currentGeneralStock < 0) {
-      return res.status(400).json({
-        error: `❌ Размер "${size}" закончился`,
-      });
-    }
+    console.log(`📅 [BOOKING] Дата мероприятия: ${eventDate.toLocaleDateString("ru-RU")}`);
+    console.log(`📅 [BOOKING] Выдача: ${pickupDate.toLocaleString("ru-RU")}`);
+    console.log(`📅 [BOOKING] Возврат: ${returnDate.toLocaleString("ru-RU")}`);
 
-    // 🔒 Считаем, сколько уже АКТИВНЫХ броней на эту дату для этого размера
-    const startOfDay = new Date(selectedDate);
-    startOfDay.setHours(0, 0, 0, 0);
-    
-    const endOfDay = new Date(selectedDate);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    const existingBookings = await Booking.find({
-      costumeId,
-      size,
-      bookingDate: {
-        $gte: startOfDay,
-        $lte: endOfDay,
-      },
-      status: { $in: ['new', 'confirmed'] },
-    }).lean();
-
-    const existingBookingsCount = existingBookings.length;
-
-    console.log(`📅 [BOOKING] Дата бронирования: ${selectedDate.toLocaleDateString("ru-RU")}`);
-    console.log(`🔢 [BOOKING] Уже забронировано на эту дату: ${existingBookingsCount} шт.`);
-
-    // 🔍 КЛЮЧЕВОЙ МОМЕНТ: 
-    // Нужно учитывать, сколько ВСЕГО было изначально (когда костюм создали)
-    // Для этого смотрим: сколько ВСЕГО броней существует (не только на эту дату)
-    const allActiveBookings = await Booking.countDocuments({
+    // 🆕 Получаем все активные брони для этого костюма и размера
+    const activeBookings = await Booking.find({
       costumeId,
       size,
       status: { $in: ['new', 'confirmed'] },
-    });
+    }).select('pickupDate returnDate').lean();
 
-    console.log(`📊 [BOOKING] Всего активных броней (на все даты): ${allActiveBookings}`);
+    console.log(`📊 [BOOKING] Найдено активных броней: ${activeBookings.length}`);
 
-    // Вычисляем изначальное количество: 
-    // текущий сток + уже забронированные = изначальное количество
-    const originalTotalStock = currentGeneralStock + allActiveBookings;
+    // 🆕 Проверяем конфликты
+    const hasConflict = hasBookingConflict(activeBookings, pickupDate, returnDate);
 
-    console.log(`🎯 [BOOKING] Изначальное общее количество: ${originalTotalStock}`);
-    console.log(`✅ [BOOKING] Можно ещё забронировать на эту дату: ${originalTotalStock - existingBookingsCount}`);
-
-    // Проверяем: если количество броней на эту дату >= изначального количества → дата занята
-    if (existingBookingsCount >= originalTotalStock) {
-      console.log(`❌ [BOOKING] ОТКЛОНЕНО: Дата полностью занята`);
+    if (hasConflict) {
+      console.log(`❌ [BOOKING] ОТКЛОНЕНО: Обнаружен конфликт дат`);
       return res.status(400).json({
-        error: `❌ Эта дата уже занята для размера "${size}". Все костюмы этого размера уже забронированы на ${selectedDate.toLocaleDateString("ru-RU")}.`,
+        error: `❌ К сожалению, этот костюм (размер ${size}) недоступен в выбранный период. Пожалуйста, выберите другую дату.`,
       });
     }
 
-    console.log(`✅ [BOOKING] РАЗРЕШЕНО: Можно создать бронь`);
+    console.log(`✅ [BOOKING] РАЗРЕШЕНО: Конфликтов не обнаружено`);
+
+    // Получаем текущий сток (для информации)
+    const currentStock = costume.stockBySize?.[size] || 0;
 
     // Создание бронирования
     const booking = await Booking.create({
@@ -119,7 +143,10 @@ router.post("/", bookingRateLimit, async (req, res) => {
       costumeId,
       costumeTitle: costume.title,
       size,
-      bookingDate: new Date(bookingDate),
+      bookingDate: eventDate,
+      eventDate,
+      pickupDate,
+      returnDate,
       childName,
       childAge,
       childHeight,
@@ -129,12 +156,12 @@ router.post("/", bookingRateLimit, async (req, res) => {
 
     console.log(`📝 [BOOKING] Бронь создана: ID ${booking._id}`);
 
-    // 🔒 Уменьшаем общий сток только ПОСЛЕ успешного создания брони
+    // 🔒 Уменьшаем общий сток
     await Costume.findByIdAndUpdate(costumeId, {
       $inc: { [`stockBySize.${size}`]: -1 },
     });
 
-    console.log(`📉 [BOOKING] Общий сток уменьшен: ${currentGeneralStock} → ${currentGeneralStock - 1}`);
+    console.log(`📉 [BOOKING] Общий сток уменьшен: ${currentStock} → ${currentStock - 1}`);
 
     // Добавление в Google Sheets
     let sheetLink = "";
@@ -142,7 +169,9 @@ router.post("/", bookingRateLimit, async (req, res) => {
       sheetLink = await appendBookingWithId({
         bookingId: String(booking._id),
         date: new Date().toLocaleString("ru-RU"),
-        bookingDate: new Date(bookingDate).toLocaleDateString("ru-RU"),
+        bookingDate: eventDate.toLocaleDateString("ru-RU"),
+        pickupDate: pickupDate.toLocaleString("ru-RU"),  // ✅ Добавлено
+        returnDate: returnDate.toLocaleString("ru-RU"),  // ✅ Добавлено
         clientName,
         phone,
         costumeTitle: costume.title,
@@ -151,7 +180,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
         childAge,
         childHeight,
         status: "Новая заявка",
-        stock: currentGeneralStock - 1,
+        stock: currentStock - 1,
       });
       booking.googleSheetRowLink = sheetLink;
       await booking.save();
@@ -163,8 +192,6 @@ router.post("/", bookingRateLimit, async (req, res) => {
     const updatedCostume = await Costume.findById(costumeId);
     const remainingStock = updatedCostume?.stockBySize?.[size] || 0;
 
-    console.log(`📦 [BOOKING] Итоговый остаток: ${remainingStock} шт.`);
-
     // Уведомление администратору
     const adminId = process.env.ADMIN_CHAT_ID;
     if (adminId) {
@@ -173,14 +200,15 @@ router.post("/", bookingRateLimit, async (req, res) => {
         `👤 *Клиент:* ${clientName}\n` +
         `📞 *Телефон:* ${phone}\n` +
         `🧥 *Костюм:* ${costume.title}\n` +
-        `📏 *Размер:* ${size}\n` +
-        `📅 *Дата аренды:* ${new Date(bookingDate).toLocaleDateString("ru-RU", { 
+        `📏 *Размер:* ${size}\n\n` +
+        `📅 *Дата мероприятия:* ${eventDate.toLocaleDateString("ru-RU", { 
           day: "numeric", 
           month: "long", 
           year: "numeric" 
         })}\n` +
+        `📦 *Выдача:* ${pickupDate.toLocaleDateString("ru-RU")} с 17:00 до 19:00\n` +
+        `🔄 *Возврат:* ${returnDate.toLocaleDateString("ru-RU")} до 17:00\n\n` +
         `📦 *Общий остаток:* ${remainingStock} шт.\n` +
-        `📊 *Забронировано на эту дату:* ${existingBookingsCount + 1} из ${originalTotalStock} шт.\n` +
         (childName ? `👶 *Имя ребёнка:* ${childName}\n` : "") +
         (childAge ? `🎂 *Возраст:* ${childAge} лет\n` : "") +
         (childHeight ? `📐 *Рост:* ${childHeight} см\n\n` : "\n") +
@@ -202,13 +230,17 @@ router.post("/", bookingRateLimit, async (req, res) => {
         `✅ *Ваша заявка успешно оформлена!*\n\n` +
         `🧥 *Костюм:* ${costume.title}\n` +
         `📏 *Размер:* ${size}\n` +
-        `📅 *Дата аренды:* ${new Date(bookingDate).toLocaleDateString("ru-RU", { 
+        `📅 *Дата мероприятия:* ${eventDate.toLocaleDateString("ru-RU", { 
           day: "numeric", 
           month: "long", 
           year: "numeric" 
         })}\n\n` +
-        `Мы свяжемся с вами для подтверждения.\n` +
-        `Спасибо за ваш заказ! 🎉`;
+        `📦 *Выдача костюма:*\n` +
+        `${pickupDate.toLocaleDateString("ru-RU")} с 17:00 до 19:00\n\n` +
+        `🔄 *Возврат костюма:*\n` +
+        `${returnDate.toLocaleDateString("ru-RU")} до 17:00\n\n` +
+        `⚠️ При нарушении сроков возврата предусмотрен штраф.\n\n` +
+        `Мы свяжемся с вами для подтверждения.\nСпасибо за ваш заказ! 🎉`;
 
       await bot.api.sendMessage(userTgId, userMessage, {
         parse_mode: "Markdown",
@@ -285,7 +317,7 @@ router.put("/:id/cancel", async (req, res) => {
         `📞 *Телефон:* ${booking.phone}\n` +
         `🧥 *Костюм:* ${booking.costumeTitle}\n` +
         `📏 *Размер:* ${booking.size}\n` +
-        `📅 *Дата аренды:* ${new Date(booking.bookingDate).toLocaleDateString("ru-RU")}\n` +
+        `📅 *Дата мероприятия:* ${new Date(booking.eventDate).toLocaleDateString("ru-RU")}\n` +
         `📅 *Дата заказа:* ${new Date(booking.createdAt).toLocaleString("ru-RU")}\n` +
         `📅 *Дата отмены:* ${new Date().toLocaleString("ru-RU")}\n\n` +
         `🔄 *Статус изменён:* ${oldStatus} → cancelled\n` +

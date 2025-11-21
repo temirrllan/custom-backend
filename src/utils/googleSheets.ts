@@ -2,8 +2,10 @@ import { google } from "googleapis";
 
 interface AppendData {
   bookingId: string;
-  date: string; // Дата создания заявки
-  bookingDate: string; // 🆕 Дата бронирования (когда клиент хочет получить костюм)
+  date: string;           // Дата создания заявки
+  bookingDate: string;    // Дата мероприятия
+  pickupDate: string;     // 🆕 Дата выдачи
+  returnDate: string;     // 🆕 Дата возврата
   clientName: string;
   phone: string;
   costumeTitle: string;
@@ -37,29 +39,44 @@ export async function appendBookingWithId(data: AppendData): Promise<string> {
 
   const sheets = google.sheets({ version: "v4", auth: jwtClient });
 
-  // 🆕 ОБНОВЛЁННЫЙ ПОРЯДОК КОЛОНОК:
-  // A: Дата создания | B: Дата бронирования | C: Имя | D: Телефон | E: Костюм | F: Размер 
-  // G: Имя ребёнка | H: Возраст | I: Рост | J: Статус | K: Количество | L: ID заказа
+  // 🆕 ОБНОВЛЁННАЯ СТРУКТУРА ТАБЛИЦЫ (13 колонок):
+  // A: Дата создания
+  // B: Дата мероприятия
+  // C: Дата выдачи (день до, 17:00-19:00)
+  // D: Дата возврата (день мероприятия, до 17:00)
+  // E: Имя клиента
+  // F: Телефон
+  // G: Костюм
+  // H: Размер
+  // I: Имя ребёнка
+  // J: Возраст
+  // K: Рост
+  // L: Статус
+  // M: Количество (остаток)
+  // N: ID заказа
+
   const values = [
     [
-      data.date || new Date().toLocaleString("ru-RU"),           // A - Дата создания
-      data.bookingDate || "",                                    // B - 🆕 Дата бронирования
-      data.clientName || "",                                     // C - Имя клиента
-      data.phone || "",                                          // D - Телефон
-      data.costumeTitle || "",                                   // E - Костюм
-      data.size || "",                                           // F - Размер
-      data.childName || "",                                      // G - Имя ребёнка
-      data.childAge || "",                                       // H - Возраст
-      data.childHeight || "",                                    // I - Рост
-      data.status || "new",                                      // J - Статус
-      data.stock !== undefined ? data.stock : "",                // K - Количество
-      data.bookingId || "",                                      // L - ID заказа
+      data.date || new Date().toLocaleString("ru-RU"),           // A
+      data.bookingDate || "",                                    // B
+      data.pickupDate || "",                                     // C - 🆕
+      data.returnDate || "",                                     // D - 🆕
+      data.clientName || "",                                     // E
+      data.phone || "",                                          // F
+      data.costumeTitle || "",                                   // G
+      data.size || "",                                           // H
+      data.childName || "",                                      // I
+      data.childAge || "",                                       // J
+      data.childHeight || "",                                    // K
+      data.status || "new",                                      // L
+      data.stock !== undefined ? data.stock : "",                // M
+      data.bookingId || "",                                      // N
     ],
   ];
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: sheetId,
-    range: `${sheetName}!A:L`, // 🆕 12 колонок
+    range: `${sheetName}!A:N`, // 🆕 14 колонок
     valueInputOption: "USER_ENTERED",
     requestBody: { values },
   });
@@ -67,7 +84,7 @@ export async function appendBookingWithId(data: AppendData): Promise<string> {
   return `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
 }
 
-// Точное обновление по ID заказа (колонка L)
+// Точное обновление по ID заказа (колонка N)
 export async function updateBookingByIdInSheet(
   bookingId: string,
   newStatus: string
@@ -96,7 +113,7 @@ export async function updateBookingByIdInSheet(
   // Получаем все данные
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
-    range: `${sheetName}!A:L`,
+    range: `${sheetName}!A:N`,
   });
 
   const rows = response.data.values;
@@ -104,10 +121,10 @@ export async function updateBookingByIdInSheet(
     throw new Error("Таблица пуста");
   }
 
-  // Ищем строку по ID заказа (колонка L, индекс 11)
+  // Ищем строку по ID заказа (колонка N, индекс 13)
   let rowIndex = -1;
   for (let i = 1; i < rows.length; i++) {
-    if (rows[i][11] === bookingId) {
+    if (rows[i][13] === bookingId) {
       rowIndex = i + 1;
       break;
     }
@@ -118,10 +135,10 @@ export async function updateBookingByIdInSheet(
     return;
   }
 
-  // Обновляем статус (колонка J)
+  // Обновляем статус (колонка L, индекс 11)
   await sheets.spreadsheets.values.update({
     spreadsheetId: sheetId,
-    range: `${sheetName}!J${rowIndex}`,
+    range: `${sheetName}!L${rowIndex}`,
     valueInputOption: "USER_ENTERED",
     requestBody: {
       values: [[newStatus]],
