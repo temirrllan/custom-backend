@@ -108,7 +108,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
 
     console.log(`✅ [BOOKING] РАЗРЕШЕНО: Доступно ${totalStock - conflictingBookings} из ${totalStock} экземпляров`);
 
-    // Получаем текущий сток (для информации)
+    // ⚠️ ВАЖНО: НЕ УМЕНЬШАЕМ СТОК! Размер можно сдавать каждый день
     const currentStock = costume.stockBySize?.[size] || 0;
 
     // Создание бронирования
@@ -131,13 +131,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
     });
 
     console.log(`📝 [BOOKING] Бронь создана: ID ${booking._id}`);
-
-    // 🔒 Уменьшаем общий сток
-    await Costume.findByIdAndUpdate(costumeId, {
-      $inc: { [`stockBySize.${size}`]: -1 },
-    });
-
-    console.log(`📉 [BOOKING] Общий сток уменьшен: ${currentStock} → ${currentStock - 1}`);
+    console.log(`📦 [BOOKING] Сток НЕ изменён (остаётся ${currentStock}), т.к. размер можно сдавать каждый день`);
 
     // Добавление в Google Sheets
     let sheetLink = "";
@@ -156,17 +150,14 @@ router.post("/", bookingRateLimit, async (req, res) => {
         childAge,
         childHeight,
         status: "Новая заявка",
-        stock: currentStock - 1,
+        stock: currentStock, // Сток не изменился
       });
       booking.googleSheetRowLink = sheetLink;
       await booking.save();
+      console.log(`✅ [GOOGLE_SHEETS] Запись добавлена: ${sheetLink}`);
     } catch (err) {
       console.warn("❗ Google Sheets append failed:", err);
     }
-
-    // Получаем обновлённый остаток
-    const updatedCostume = await Costume.findById(costumeId);
-    const remainingStock = updatedCostume?.stockBySize?.[size] || 0;
 
     // Уведомление администратору
     const adminId = process.env.ADMIN_CHAT_ID;
@@ -184,7 +175,7 @@ router.post("/", bookingRateLimit, async (req, res) => {
         })}\n` +
         `📦 *Выдача:* ${pickupDate.toLocaleDateString("ru-RU")} с 17:00 до 19:00\n` +
         `🔄 *Возврат:* ${returnDate.toLocaleDateString("ru-RU")} до 17:00\n\n` +
-        `📦 *Общий остаток:* ${remainingStock} шт.\n` +
+        `📦 *Общий остаток:* ${currentStock} шт. (не изменился)\n` +
         (childName ? `👶 *Имя ребёнка:* ${childName}\n` : "") +
         (childAge ? `🎂 *Возраст:* ${childAge} лет\n` : "") +
         (childHeight ? `📐 *Рост:* ${childHeight} см\n\n` : "\n") +
@@ -266,16 +257,12 @@ router.put("/:id/cancel", async (req, res) => {
       return res.status(400).json({ error: "Этот заказ уже завершён или отменён" });
     }
 
-    // Возвращаем сток
-    await Costume.findByIdAndUpdate(booking.costumeId, {
-      $inc: { [`stockBySize.${booking.size}`]: 1 },
-    });
-
+    // ⚠️ ВАЖНО: НЕ ВОЗВРАЩАЕМ СТОК при отмене, т.к. мы его не уменьшали
     const oldStatus = booking.status;
     booking.status = "cancelled";
     await booking.save();
 
-    console.log(`🔄 [CANCEL] Заказ ${booking._id} отменён, сток возвращён`);
+    console.log(`🔄 [CANCEL] Заказ ${booking._id} отменён (сток НЕ изменён)`);
 
     // Обновляем Google Sheets
     try {
@@ -297,7 +284,7 @@ router.put("/:id/cancel", async (req, res) => {
         `📅 *Дата заказа:* ${new Date(booking.createdAt).toLocaleString("ru-RU")}\n` +
         `📅 *Дата отмены:* ${new Date().toLocaleString("ru-RU")}\n\n` +
         `🔄 *Статус изменён:* ${oldStatus} → cancelled\n` +
-        `📦 *Сток возвращён:* +1 к размеру ${booking.size}\n\n` +
+        `📦 *Сток не изменён* (размер можно сдавать каждый день)\n\n` +
         `🆔 ID заявки: \`${booking._id}\``;
 
       try {
