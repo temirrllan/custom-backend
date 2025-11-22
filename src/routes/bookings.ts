@@ -9,45 +9,6 @@ import { bookingRateLimit } from "../middlewares/bookingRateLimit";
 const router = Router();
 
 /**
- * 🆕 Вспомогательная функция: проверка конфликтов броней
- * 
- * Логика:
- * - pickupDate: день до события, 17:00-19:00
- * - returnDate: день события, до 17:00
- * 
- * Конфликт возникает, если периоды [pickup, return] пересекаются
- */
-function hasBookingConflict(
-  existingBookings: Array<{ pickupDate: Date; returnDate: Date }>,
-  newPickup: Date,
-  newReturn: Date
-): boolean {
-  for (const booking of existingBookings) {
-    const existingPickup = new Date(booking.pickupDate);
-    const existingReturn = new Date(booking.returnDate);
-    
-    // Проверяем пересечение периодов
-    // Конфликт есть, если:
-    // 1. Новая выдача попадает в период существующей брони
-    // 2. Новый возврат попадает в период существующей брони
-    // 3. Новая бронь полностью покрывает существующую
-    
-    const newPickupTime = newPickup.getTime();
-    const newReturnTime = newReturn.getTime();
-    const existingPickupTime = existingPickup.getTime();
-    const existingReturnTime = existingReturn.getTime();
-    
-    // Периоды пересекаются, если:
-    // (начало1 <= конец2) И (конец1 >= начало2)
-    if (newPickupTime <= existingReturnTime && newReturnTime >= existingPickupTime) {
-      return true;
-    }
-  }
-  
-  return false;
-}
-
-/**
  * 🆕 Вспомогательная функция: расчёт дат выдачи и возврата
  */
 function calculateBookingDates(eventDate: Date): {
@@ -122,34 +83,30 @@ router.post("/", bookingRateLimit, async (req, res) => {
 
     console.log(`📦 [BOOKING] Всего экземпляров размера ${size}: ${totalStock}`);
 
-    // 🆕 Получаем все активные брони для этого костюма и размера
-    const activeBookings = await Booking.find({
+    // 🆕 НОВАЯ ЛОГИКА: Проверяем брони ТОЛЬКО на дату события
+    const eventDateStr = eventDate.toISOString().split('T')[0];
+    
+    const conflictingBookings = await Booking.countDocuments({
       costumeId,
       size,
       status: { $in: ['new', 'confirmed'] },
-    }).select('pickupDate returnDate').lean();
-
-    console.log(`📊 [BOOKING] Найдено активных броней: ${activeBookings.length}`);
-
-    // 🆕 Проверяем, сколько броней конфликтуют с новым периодом
-    let conflictCount = 0;
-    for (const booking of activeBookings) {
-      if (hasBookingConflict([booking], pickupDate, returnDate)) {
-        conflictCount++;
+      eventDate: {
+        $gte: new Date(eventDateStr + 'T00:00:00.000Z'),
+        $lt: new Date(eventDateStr + 'T23:59:59.999Z')
       }
-    }
+    });
 
-    console.log(`⚠️ [BOOKING] Конфликтующих броней: ${conflictCount} из ${totalStock} доступных`);
+    console.log(`⚠️ [BOOKING] Броней на ${eventDateStr}: ${conflictingBookings} из ${totalStock} доступных`);
 
-    // 🆕 Проверяем: если количество конфликтов >= общего количества экземпляров → отклоняем
-    if (conflictCount >= totalStock) {
-      console.log(`❌ [BOOKING] ОТКЛОНЕНО: Все ${totalStock} экземпляров заняты в этот период`);
+    // 🆕 Проверяем: если количество броней на эту дату >= общего количества экземпляров → отклоняем
+    if (conflictingBookings >= totalStock) {
+      console.log(`❌ [BOOKING] ОТКЛОНЕНО: Все ${totalStock} экземпляров заняты на ${eventDateStr}`);
       return res.status(400).json({
-        error: `❌ К сожалению, все костюмы этого размера (${size}) заняты в выбранный период. Пожалуйста, выберите другую дату.`,
+        error: `❌ К сожалению, все костюмы этого размера (${size}) заняты на ${eventDate.toLocaleDateString("ru-RU")}. Пожалуйста, выберите другую дату.`,
       });
     }
 
-    console.log(`✅ [BOOKING] РАЗРЕШЕНО: Доступно ${totalStock - conflictCount} из ${totalStock} экземпляров`);
+    console.log(`✅ [BOOKING] РАЗРЕШЕНО: Доступно ${totalStock - conflictingBookings} из ${totalStock} экземпляров`);
 
     // Получаем текущий сток (для информации)
     const currentStock = costume.stockBySize?.[size] || 0;
@@ -189,8 +146,8 @@ router.post("/", bookingRateLimit, async (req, res) => {
         bookingId: String(booking._id),
         date: new Date().toLocaleString("ru-RU"),
         bookingDate: eventDate.toLocaleDateString("ru-RU"),
-        pickupDate: pickupDate.toLocaleString("ru-RU"),  // ✅ Добавлено
-        returnDate: returnDate.toLocaleString("ru-RU"),  // ✅ Добавлено
+        pickupDate: pickupDate.toLocaleString("ru-RU"),
+        returnDate: returnDate.toLocaleString("ru-RU"),
         clientName,
         phone,
         costumeTitle: costume.title,

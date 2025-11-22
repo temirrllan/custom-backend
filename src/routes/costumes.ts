@@ -18,11 +18,10 @@ router.get('/', async (req, res) => {
 /**
  * 🆕 GET /api/costumes/:id/booked-dates
  * 
- * Возвращает список дат, которые заблокированы для бронирования
- * 
- * Новая логика:
- * - Для каждой даты считаем, сколько активных броней пересекаются с периодом этой даты
- * - Блокируем дату только если количество пересечений >= общего количества экземпляров
+ * НОВАЯ ЛОГИКА:
+ * - Блокируем только ДАТУ СОБЫТИЯ (eventDate), а НЕ весь период выдачи-возврата
+ * - Один размер можно сдавать каждый день
+ * - Блокируется дата только если ВСЕ экземпляры этого размера заняты в этот день
  */
 router.get('/:id/booked-dates', async (req, res) => {
   try {
@@ -50,7 +49,7 @@ router.get('/:id/booked-dates', async (req, res) => {
       costumeId: id,
       size: size as string,
       status: { $in: ['new', 'confirmed'] },
-    }).select('eventDate pickupDate returnDate').lean();
+    }).select('eventDate').lean();
 
     console.log(`📅 [BLOCKED_DATES] Костюм: ${costume.title}, Размер: ${size}`);
     console.log(`📦 [BLOCKED_DATES] Всего экземпляров: ${totalStock}`);
@@ -61,66 +60,26 @@ router.get('/:id/booked-dates', async (req, res) => {
       return res.json([]);
     }
 
-    // Функция проверки пересечения периодов
-    const periodsOverlap = (
-      start1: Date, 
-      end1: Date, 
-      start2: Date, 
-      end2: Date
-    ): boolean => {
-      return start1.getTime() <= end2.getTime() && end1.getTime() >= start2.getTime();
-    };
+    // 🆕 НОВАЯ ЛОГИКА: Считаем количество броней на каждую дату события
+    const dateCountMap = new Map<string, number>();
 
-    // Собираем все уникальные даты из броней
-    const allDates = new Set<string>();
     for (const booking of bookings) {
-      const pickup = new Date(booking.pickupDate);
-      const returnD = new Date(booking.returnDate);
+      const eventDate = new Date(booking.eventDate);
+      eventDate.setHours(0, 0, 0, 0);
+      const dateStr = eventDate.toISOString().split('T')[0];
       
-      pickup.setHours(0, 0, 0, 0);
-      returnD.setHours(0, 0, 0, 0);
-      
-      const current = new Date(pickup);
-      while (current <= returnD) {
-        allDates.add(current.toISOString().split('T')[0]);
-        current.setDate(current.getDate() + 1);
-      }
+      dateCountMap.set(dateStr, (dateCountMap.get(dateStr) || 0) + 1);
     }
 
-    console.log(`📅 [BLOCKED_DATES] Уникальных дат в бронях: ${allDates.size}`);
-
-    // Для каждой уникальной даты проверяем, сколько броней её занимают
+    // Блокируем даты, где количество броней >= общего количества экземпляров
     const blockedDates: Array<{ date: string; size: string }> = [];
 
-    for (const dateStr of allDates) {
-      // Создаём период для этой даты (с учётом правил выдачи/возврата)
-      const eventDate = new Date(dateStr);
-      eventDate.setHours(0, 0, 0, 0);
-      
-      const pickupForDate = new Date(eventDate);
-      pickupForDate.setDate(pickupForDate.getDate() - 1);
-      pickupForDate.setHours(17, 0, 0, 0);
-      
-      const returnForDate = new Date(eventDate);
-      returnForDate.setHours(17, 0, 0, 0);
-
-      // Считаем, сколько броней пересекаются с этим периодом
-      let conflictCount = 0;
-      for (const booking of bookings) {
-        const bookingPickup = new Date(booking.pickupDate);
-        const bookingReturn = new Date(booking.returnDate);
-        
-        if (periodsOverlap(pickupForDate, returnForDate, bookingPickup, bookingReturn)) {
-          conflictCount++;
-        }
-      }
-
-      // Блокируем дату только если все экземпляры заняты
-      if (conflictCount >= totalStock) {
+    for (const [dateStr, count] of dateCountMap.entries()) {
+      if (count >= totalStock) {
         blockedDates.push({ date: dateStr, size: size as string });
-        console.log(`🔒 [BLOCKED_DATES] ${dateStr}: ${conflictCount}/${totalStock} - ЗАБЛОКИРОВАНО`);
+        console.log(`🔒 [BLOCKED_DATES] ${dateStr}: ${count}/${totalStock} - ЗАБЛОКИРОВАНО`);
       } else {
-        console.log(`✅ [BLOCKED_DATES] ${dateStr}: ${conflictCount}/${totalStock} - свободно`);
+        console.log(`✅ [BLOCKED_DATES] ${dateStr}: ${count}/${totalStock} - свободно`);
       }
     }
 
